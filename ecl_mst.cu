@@ -318,6 +318,20 @@ static bool* gpuMST(const ECLgraph& g, const int threshold)
 
   CheckCuda(__LINE__);
 
+
+    // 🧠 🆕 PREFETCH EVERYTHING TO GPU before launching kernels
+  cudaMemPrefetchAsync(d_inMST, g.edges * sizeof(bool), Device);
+  cudaMemPrefetchAsync(d_parent, g.nodes * sizeof(int), Device);
+  cudaMemPrefetchAsync(d_minv, g.nodes * sizeof(ull), Device);
+  cudaMemPrefetchAsync(d_wl1, (g.edges / 2) * sizeof(int4), Device);
+  cudaMemPrefetchAsync(d_wl2, (g.edges / 2) * sizeof(int4), Device);
+  cudaMemPrefetchAsync(d_wlsize, sizeof(int), Device);
+  cudaMemPrefetchAsync(d_nindex, (g.nodes + 1) * sizeof(int), Device);
+  cudaMemPrefetchAsync(d_nlist, g.edges * sizeof(int), Device);
+  cudaMemPrefetchAsync(d_eweight, g.edges * sizeof(int), Device);
+
+  cudaDeviceSynchronize();  // 🧹 Wait for prefetch to complete
+
   CPUTimer timer;
   timer.start();
 
