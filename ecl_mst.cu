@@ -218,34 +218,43 @@ static __global__ void initWL(int4* const __restrict__ wl2, int* const __restric
 static __global__ void kernel1(const int4* const __restrict__ wl1, const int wl1size, int4* const __restrict__ wl2, int* const __restrict__ wl2size, const int* const __restrict__ parent, volatile ull* const __restrict__ minv)
 {
   const int idx = threadIdx.x + blockIdx.x * ThreadsPerBlock;
+
   if (idx < wl1size) {
     int4 el = wl1[idx];
+
     const int arep = find(el.x, parent);
     const int brep = find(el.y, parent);
+
     if (arep != brep) {
       el.x = arep;
       el.y = brep;
       wl2[atomicAdd(wl2size, 1)] = el;
       const ull val = (((ull)el.z) << 32) | el.w;
-      if (minv[arep] > val) atomicMin((ull*)&minv[arep], val);
-      if (minv[brep] > val) atomicMin((ull*)&minv[brep], val);
+      atomicMin((ull*)&minv[arep], val);
+      atomicMin((ull*)&minv[brep], val);
     }
   }
 }
 
 
+
+
 static __global__ void kernel2(const int4* const __restrict__ wl, const int wlsize, int* const __restrict__ parent, ull* const __restrict__ minv, bool* const __restrict__ inMST)
 {
   const int idx = threadIdx.x + blockIdx.x * ThreadsPerBlock;
+
   if (idx < wlsize) {
     const int4 el = wl[idx];
     const ull val = (((ull)el.z) << 32) | el.w;
+
     if ((val == minv[el.x]) || (val == minv[el.y])) {
       join(el.x, el.y, parent);
       inMST[el.w] = true;
     }
   }
 }
+
+
 
 
 static __global__ void kernel3(const int4* const __restrict__ wl, const int wlsize, volatile ull* const __restrict__ minv)
@@ -270,39 +279,42 @@ static void CheckCuda(const int line)
 }
 
 
+/* Allocated space in Unified Memory */
+
 template <bool filter>
 static bool* gpuMST(const ECLgraph& g, const int threshold)
 {
   bool* d_inMST = NULL;
-  cudaMalloc((void**)&d_inMST, g.edges * sizeof(bool));
+  cudaMallocManaged(&d_inMST, g.edges * sizeof(bool));  
+
   bool* const inMST = new bool [g.edges];
 
   int* d_parent = NULL;
-  cudaMalloc((void**)&d_parent, g.nodes * sizeof(int));
+  cudaMallocManaged(&d_parent, g.nodes * sizeof(int));  
 
   ull* d_minv = NULL;
-  cudaMalloc((void**)&d_minv, g.nodes * sizeof(ull));
+  cudaMallocManaged(&d_minv, g.nodes * sizeof(ull)); 
 
   int4* d_wl1 = NULL;
-  cudaMalloc((void**)&d_wl1, g.edges / 2 * sizeof(int4));
-
-  int* d_wlsize = NULL;
-  cudaMalloc((void**)&d_wlsize, sizeof(int));
+  cudaMallocManaged(&d_wl1, g.edges / 2 * sizeof(int4));  
 
   int4* d_wl2 = NULL;
-  cudaMalloc((void**)&d_wl2, g.edges / 2 * sizeof(int4));
+  cudaMallocManaged(&d_wl2, g.edges / 2 * sizeof(int4));  
+
+  int* d_wlsize = NULL;
+  cudaMallocManaged(&d_wlsize, sizeof(int)); 
 
   int* d_nindex = NULL;
-  cudaMalloc((void**)&d_nindex, (g.nodes + 1) * sizeof(int));
+  cudaMallocManaged(&d_nindex, (g.nodes + 1) * sizeof(int));
   cudaMemcpy(d_nindex, g.nindex, (g.nodes + 1) * sizeof(int), cudaMemcpyHostToDevice);
-
   int* d_nlist = NULL;
-  cudaMalloc((void**)&d_nlist, g.edges * sizeof(int));
-  cudaMemcpy(d_nlist, g.nlist, g.edges * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMallocManaged(&d_nlist, g.edges * sizeof(int));
+  cudaMemcpy(d_nlist, g.nlist, g.edges * sizeof(int), cudaMemcpyHostToDevice); 
 
   int* d_eweight = NULL;
-  cudaMalloc((void**)&d_eweight, g.edges * sizeof(int));
+  cudaMallocManaged(&d_eweight, g.edges * sizeof(int));
   cudaMemcpy(d_eweight, g.eweight, g.edges * sizeof(int), cudaMemcpyHostToDevice);
+
 
   CheckCuda(__LINE__);
 

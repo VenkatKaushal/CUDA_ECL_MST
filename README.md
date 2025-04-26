@@ -14,7 +14,7 @@ To run it in DGX:
     python3 
 3. Run the following command to run the program:
     - module load cuda/11.7
-    - nvcc -O3 -o ecl_mst ecl_mst.cu
+    - nvcc -O3 -arch=sm_80 -o ecl_mst ecl_mst.cu
 4. Create a slrum script:
     ```
     #!/bin/sh
