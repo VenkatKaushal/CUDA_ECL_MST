@@ -254,30 +254,29 @@ static __global__ void kernel1(const int4* const __restrict__ wl1,
 }
 
 
-static __global__ void kernel2_fused(
-    const int4* const __restrict__ wl, 
-    int wlsize, 
-    int* const __restrict__ parent, 
-    ull* const __restrict__ minv, 
-    bool* const __restrict__ inMST)
+
+static __global__ void kernel2(const int4* const __restrict__ wl, const int wlsize, int* const __restrict__ parent, ull* const __restrict__ minv, bool* const __restrict__ inMST)
 {
-    int idx = blockIdx.x * ThreadsPerBlock + threadIdx.x;
-    if (idx >= wlsize) return;
-
-    int4 el = wl[idx];
-    // pack weight|edgeIndex for comparison
-    ull val = ( (ull)el.z << 32 ) | el.w;
-    int x = el.x, y = el.y;
-
-    // 1) hook and mark
-    if (val == minv[x] || val == minv[y]) {
-        join(x, y, parent);
-        inMST[el.w] = true;
+  const int idx = threadIdx.x + blockIdx.x * ThreadsPerBlock;
+  if (idx < wlsize) {
+    const int4 el = wl[idx];
+    const ull val = (((ull)el.z) << 32) | el.w;
+    if ((val == minv[el.x]) || (val == minv[el.y])) {
+      join(el.x, el.y, parent);
+      inMST[el.w] = true;
     }
+  }
+}
 
-    // 2) reset both minima slots — atomicExch safe for concurrency
-    atomicExch((ull*)&minv[x], ULLONG_MAX);
-    atomicExch((ull*)&minv[y], ULLONG_MAX);
+
+static __global__ void kernel3(const int4* const __restrict__ wl, const int wlsize, volatile ull* const __restrict__ minv)
+{
+  const int idx = threadIdx.x + blockIdx.x * ThreadsPerBlock;
+  if (idx < wlsize) {
+    const int4 el = wl[idx];
+    minv[el.x] = ULONG_MAX;
+    minv[el.y] = ULONG_MAX;
+  }
 }
 
 
@@ -346,7 +345,9 @@ static bool* gpuMST(const ECLgraph& g, const int threshold)
     std::swap(d_wl1, d_wl2);
     cudaMemcpy(&wlsize, d_wlsize, sizeof(int), cudaMemcpyDeviceToHost);
     if (wlsize > 0) {
-     kernel2_fused<<<blocks,ThreadsPerBlock>>>(d_wl1, wlsize, d_parent, d_minv, d_inMST);
+      kernel2<<<blocks, ThreadsPerBlock>>>(d_wl1, wlsize, d_parent, d_minv, d_inMST);
+      // kernel3<<<blocks, ThreadsPerBlock>>>(d_wl1, wlsize, d_minv);
+       cudaMemset(d_minv, 0xFF, g.nodes * sizeof(ull));
     }
   }
 
@@ -361,7 +362,9 @@ static bool* gpuMST(const ECLgraph& g, const int threshold)
       std::swap(d_wl1, d_wl2);
       cudaMemcpy(&wlsize, d_wlsize, sizeof(int), cudaMemcpyDeviceToHost);
       if (wlsize > 0) {
-        kernel2_fused<<<blocks,ThreadsPerBlock>>>(d_wl1, wlsize, d_parent, d_minv, d_inMST);
+        kernel2<<<blocks, ThreadsPerBlock>>>(d_wl1, wlsize, d_parent, d_minv, d_inMST);
+        // kernel3<<<blocks, ThreadsPerBlock>>>(d_wl1, wlsize, d_minv);
+         cudaMemset(d_minv, 0xFF, g.nodes * sizeof(ull));
       }
     }
   }
