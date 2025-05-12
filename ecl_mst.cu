@@ -137,9 +137,11 @@ static bool* cpuMST(const ECLgraph& g)
 
 static inline __device__ int find(int curr, int* const __restrict__ parent)
 {
-    int next;
-    while (curr != (next = parent[curr])) {
-        curr = next;
+    // Path halving: shorten paths by linking each node to its grandparent
+    while (parent[curr] != curr) {
+        int grand = parent[parent[curr]];
+        parent[curr] = grand;
+        curr = grand;
     }
     return curr;
 }
@@ -247,7 +249,6 @@ static __global__ void kernel1(const int4* const __restrict__ wl1,
         atomicMin((ull*)&minv[brep], val);
     }
 }
-
 static __global__ void kernel2(const int4* const __restrict__ wl, const int wlsize, int* const __restrict__ parent, ull* const __restrict__ minv, bool* const __restrict__ inMST)
 {
   const int idx = threadIdx.x + blockIdx.x * ThreadsPerBlock;
