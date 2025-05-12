@@ -135,13 +135,12 @@ static bool* cpuMST(const ECLgraph& g)
   return inMST;
 }
 
-static inline __device__ int find(int curr, int* const __restrict__ parent)
+static inline __device__ int find(int curr, const int* const __restrict__ parent)
 {
-    // Path halving: shorten paths by linking each node to its grandparent
-    while (parent[curr] != curr) {
-        int grand = parent[parent[curr]];
-        parent[curr] = grand;
-        curr = grand;
+    // standard find without path compression
+    int next;
+    while (curr != (next = parent[curr])) {
+        curr = next;
     }
     return curr;
 }
@@ -159,37 +158,38 @@ static __global__ void initPM(const int nodes,
                               int* const __restrict__ parent,
                               ull* const __restrict__ minv)
 {
-    int v = threadIdx.x + blockIdx.x * ThreadsPerBlock;
+    int v = blockIdx.x * ThreadsPerBlock + threadIdx.x;
     if (v < nodes) {
         parent[v] = v;
-        minv[v]    = ULONG_MAX;
+        minv[v]   = ULONG_MAX;
     }
 }
 
 template <bool first>
 static __global__ void initWL(int4* const __restrict__ wl2,
-                              int*   const __restrict__ wl2size,
+                              int* const __restrict__ wl2size,
                               const int                nodes,
                               const int* const __restrict__ nindex,
                               const int* const __restrict__ nlist,
                               const int* const __restrict__ eweight,
-                              ull*   const __restrict__ minv,
-                              int*   const __restrict__ parent,
+                              ull* const __restrict__ minv,
+                              const int* const __restrict__ parent,
                               const int                threshold)
 {
-    int v = threadIdx.x + blockIdx.x * ThreadsPerBlock;
+    int v = blockIdx.x * ThreadsPerBlock + threadIdx.x;
     if (v >= nodes) return;
 
-    int beg = nindex[v];
-    int end = nindex[v + 1];
+    // Use __ldg to load read-only arrays into the read-only cache
+    int beg = __ldg(&nindex[v]);
+    int end = __ldg(&nindex[v + 1]);
     int deg = end - beg;
     int arep = first ? v : find(v, parent);
 
     if (deg < 4) {
         for (int j = beg; j < end; ++j) {
-            int n = nlist[j];
+            int n = __ldg(&nlist[j]);
             if (n > v) {
-                int wei = eweight[j];
+                int wei = __ldg(&eweight[j]);
                 bool ok = first ? (wei <= threshold) : (wei > threshold);
                 if (ok) {
                     int brep = first ? n : find(n, parent);
@@ -204,7 +204,7 @@ static __global__ void initWL(int4* const __restrict__ wl2,
 
     const int WS   = 32;
     int lane       = threadIdx.x & (WS - 1);
-    int bal        = __ballot_sync(~0U, deg >= 4);
+    unsigned bal   = __ballot_sync(~0U, deg >= 4);
     while (bal) {
         int who   = __ffs(bal) - 1;
         bal      &= bal - 1;
@@ -213,13 +213,16 @@ static __global__ void initWL(int4* const __restrict__ wl2,
         int wend  = __shfl_sync(~0U, end, who);
         int warep = first ? wi : __shfl_sync(~0U, arep, who);
         for (int j = wbeg + lane; j < wend; j += WS) {
-            int n   = nlist[j];
-            int wei = eweight[j];
-            if (n > wi && (first ? (wei <= threshold) : (wei > threshold))) {
-                int brep = first ? n : find(n, parent);
-                if (first || (warep != brep)) {
-                    int k = atomicAdd(wl2size, 1);
-                    wl2[k] = int4{warep, brep, wei, j};
+            int n = __ldg(&nlist[j]);
+            if (n > wi) {
+                int wei = __ldg(&eweight[j]);
+                bool ok = first ? (wei <= threshold) : (wei > threshold);
+                if (ok) {
+                    int brep = first ? n : find(n, parent);
+                    if (first || (warep != brep)) {
+                        int k = atomicAdd(wl2size, 1);
+                        wl2[k] = int4{warep, brep, wei, j};
+                    }
                 }
             }
         }
@@ -229,11 +232,11 @@ static __global__ void initWL(int4* const __restrict__ wl2,
 static __global__ void kernel1(const int4* const __restrict__ wl1,
                                const int                wl1size,
                                int4* const __restrict__ wl2,
-                               int*   const __restrict__ wl2size,
-                               int*   const __restrict__ parent,
+                               int* const __restrict__ wl2size,
+                               const int* const __restrict__ parent,
                                volatile ull* const __restrict__ minv)
 {
-    int idx = threadIdx.x + blockIdx.x * ThreadsPerBlock;
+    int idx = blockIdx.x * ThreadsPerBlock + threadIdx.x;
     if (idx >= wl1size) return;
 
     int4 el   = wl1[idx];
@@ -249,6 +252,8 @@ static __global__ void kernel1(const int4* const __restrict__ wl1,
         atomicMin((ull*)&minv[brep], val);
     }
 }
+
+
 static __global__ void kernel2(const int4* const __restrict__ wl, const int wlsize, int* const __restrict__ parent, ull* const __restrict__ minv, bool* const __restrict__ inMST)
 {
   const int idx = threadIdx.x + blockIdx.x * ThreadsPerBlock;
